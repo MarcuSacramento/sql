@@ -1,0 +1,287 @@
+SET serveroutput OFF
+SET feedback OFF
+SET termout OFF 
+SELECT '================================================================================================================================' FROM dual;
+SELECT '=========================================Verificando Execução de Cargas======================================================' FROM dual;
+SELECT '================================================================================================================================' FROM dual;
+SELECT carga,
+  CASE
+    WHEN execucao = 'S'
+    THEN 'Em Execução'
+    ELSE 'Parada'
+  END,
+  dat_atualizacao
+FROM ARSCONTROLE.TBL_APL_EXECUCAO;
+/*Checando Parametros*/
+/*A PGA é o buffer de memória que contém dados e informações de controle de uma sessão de um usuário.
+A PGA é criada e alocada quando um novo processo é inicializado no servidor quando o processo estiver de modo dedicado.
+As suas informações dependem da configuração do Banco de Dados Oracle.
+Assim, existe uma área de memória PGA para cada usuário que está executando seus trabalhos no Oracle.
+Dentro da PGA existem as seguintes estruturas:
+Uma contendo um espaço para armazenar as variáveis e matrizes
+Outra contendo dados sobre a sessão do usuário
+Uma terceira com as informações dos cursores usados
+A PGA não é compartilhada entre os usuários; ela é única para cada sessão.
+- Para Banco OLTP(On-line transactional processing system): PGA_AGGREGATE_TARGET  = (RAM Físíca Total * 80%) * 20%
+Exemplo: 16G de RAM, então (16 G * 80%)*20% ~= 2.5G
+- Para Banco DSS(Decision support systems):PGA_AGGREGATE_TARGET  = (RAM Físíca Total * 80%) * 50%
+*/
+SELECT '================================================================================================================================' FROM dual;
+SELECT '=========================================Verificando Estruturas de Memória======================================================' FROM dual;
+SELECT '================================================================================================================================' FROM dual;
+SELECT 'Checando Parametros' FROM dual;
+SELECT '================================================================================================================================' FROM dual;
+SELECT name ,
+  display_value,
+  description
+FROM V$SYSTEM_PARAMETER
+WHERE name IN( 'workarea_size_policy','pga_aggregate_target','statistics_level' ,'memory_max_target' ,'memory_target' ,'sga_max_size' ,'processes' ,'sessions' ,'open_cursors' ,'active_instance_count' ,'license_max_sessions' );
+/*'workarea memory allocated' - Quantidade de Memória PGA dedicada
+'workarea executions - optimal' - Contador cumulativo de áreas de trabalho que possuem um tamanho ideal.
+O tamanho ideal é quando não é preciso gravar dados em disco
+'workarea executions - onepass' - Contador cumulativo de áreas de trabalho que usam one pass size.
+One pass size é usado para grandes áreas de trabalho onde a gravação em disco não pode ser evitada
+Se o número for grande em relação ao optimal aumentar o PGA_AGGREGATE_TARGET
+'workarea executions - multipass' - Contador cumulativo de áreas de trabalho em mais de um one pass size.
+Pode demonstrar os sisntomas de um sistema que necessita tuning
+*/
+/*Estatísticas de uso da memória*/
+SELECT '================================================================================================================================' FROM dual;
+SELECT '================================================================================================================================' FROM dual;
+SELECT 'Estatísticas de uso da memória' FROM dual;
+SELECT '================================================================================================================================' FROM dual;
+SELECT name Estatistica,
+  (
+  CASE
+    WHEN value <1073741824
+    THEN ROUND( value /1048576,2)
+      ||' Mb'
+    ELSE ROUND( value /1048576/1024,2)
+      ||' Gb'
+  END) Valor
+FROM v$sysstat
+WHERE name ='workarea memory allocated'
+OR name LIKE '%pga%'
+UNION
+SELECT name Estatistica,
+  value
+  ||' Total' Valor
+FROM v$sysstat
+WHERE name IN('workarea executions - multipass' ,'workarea executions - onepass' ,'workarea executions - optimal')
+UNION
+SELECT NAME,
+  ROUND(VALUE/1024/1024, 2)
+  ||' MBs' AS VALOR
+FROM V$PGASTAT
+WHERE NAME IN ('aggregate PGA target parameter', 'total PGA allocated', 'total PGA inuse')
+UNION
+SELECT 'PGA cache hit percentage (Obj: 100%)',
+  VALUE
+  || '%'
+FROM V$PGASTAT
+WHERE NAME = 'cache hit percentage'
+UNION
+SELECT 'Overallocations',
+  VALUE
+  || ''
+FROM V$PGASTAT
+WHERE NAME = 'over allocation count';
+/*Performance de memória do Banco*/
+SELECT '================================================================================================================================' FROM dual;
+/*Avaliando Cache Hit Percentage da PGA. Deve estar acima de 98%
+Avaliando a Library Cache. Deve estar acima de 99%
+A Library Cache é o componente da SGA responsável por armazenar as últimas instruções SQLs executadas,
+bem como o plano de execução das mesmas.
+Sempre que uma instrução é executada no servidor, a Library Cache é consultada,
+e caso a instrução já tenha sido executada anteriormente, não será necessário executar o parse novamente,
+diminuindo o tempo de processamento da instrução.
+Avaliando Dictionary Cache. Deve estar acima de 88%
+O Dictionary Cache guarda informações sobre o dicionário de dados que são consultadas
+quando as instruções são submetidas pelo usuário.
+No Data Dictionary Cache são armazenadas informações dos database files, tabelas, índices, colunas, usuarios, privilégios.
+Avaliando o Redo Log Buffer. Ideal é próximo a zero
+O Redo Log Buffer é um buffer circular onde todas as alterações realizadas nos blocos do Oracle são registradas.
+São registrados quais blocos foram modificados e quais são os novos valores para este bloco.
+É necessário dimensionar este buffer de formar a não causar espera por espaços quando os usuários estão executando instruções DML.
+*/
+SELECT '================================================================================================================================' FROM dual;
+SELECT 'Performance de memória do Banco' FROM dual;
+SELECT 'Avaliando Cache Hit Percentage da PGA. Deve estar acima de 98%'
+FROM dual;
+SELECT 'Avaliando a Library Cache. Deve estar acima de 99%' FROM dual;
+SELECT 'Avaliando Dictionary Cache. Deve estar acima de 88%' FROM dual;
+SELECT 'Avaliando o Redo Log Buffer. Ideal é próximo a zero' FROM dual;
+SELECT '================================================================================================================================' FROM dual;
+SELECT 'Performance de memória do Banco',
+  TRUNC ( (SUM(
+  CASE
+    WHEN name LIKE 'workarea executions - optimal'
+    THEN value
+    ELSE 0
+  END) *100) / ( SUM(
+  CASE
+    WHEN name LIKE 'workarea executions - optimal'
+    THEN value
+    ELSE 0
+  END) + SUM(
+  CASE
+    WHEN name LIKE 'workarea executions - one pass'
+    THEN value
+    ELSE 0
+  END) + SUM(
+  CASE
+    WHEN name LIKE 'workarea executions - multipass'
+    THEN value
+    ELSE 0
+  END) ) )
+  ||'%' optimal_percent
+FROM v$sysstat
+WHERE name LIKE 'workarea executions - %'
+UNION
+SELECT name,
+  TO_CHAR(ROUND(value,4),'999.99')
+  ||'%' "PGA Hit Ratio"
+FROM sys.v_$pgastat
+WHERE name = 'cache hit percentage'
+UNION
+SELECT 'Dictionary Cache',
+  TO_CHAR(ROUND(SUM(GETS)/(SUM(GETS)+SUM(GETMISSES)) * 100,2),'999.99')
+  ||'%' DICT
+FROM V$ROWCACHE
+UNION
+SELECT 'Library Cache',
+  TO_CHAR(ROUND(SUM(PINHITS)/SUM(PINS) * 100,2),'999.99')
+  ||'%'
+FROM V$LIBRARYCACHE
+UNION
+SELECT 'Redo Log Buffer',
+  VALUE
+  ||''
+FROM V$SYSSTAT
+WHERE NAME = 'redo buffer allocation retries';
+/*Avaliando Cache Hit do Buffer. Deve estar acima de 80%
+O Data Buffer Cache é a estrutura de memória da SGA que contém os últimos blocos acessados pelo Oracle.
+Sempre que uma informação é solicitada, primeiro é consultado o Data Buffer Cache, e caso a informação não seja encontrada,
+ela é procurada nos blocos de dados do disco.
+Quando a informação é encontrada no disco, ela é inserida no Data Buffer Cache no lugar dos blocos que estão há mais tempo
+sem serem acessados no Buffer. Quanto melhor esta taxa de acerto do Data Buffer Cache, menos acesso ao disco o Oracle está realizando.
+*/
+SELECT '================================================================================================================================' FROM dual;
+SELECT 'Avaliando Cache Hit do Buffer. Deve estar acima de 80%' FROM dual;
+SELECT 'PHYSICAL_READS',
+  'DB_BLOCK_GETS',
+  'CONSISTENT_GETS',
+  'HIT_RATIO'
+FROM dual;
+SELECT NAME,
+  PHYSICAL_READS,
+  DB_BLOCK_GETS,
+  CONSISTENT_GETS,
+  TO_CHAR((1 - (PHYSICAL_READS / (DB_BLOCK_GETS + CONSISTENT_GETS)))*100,'999.99')
+  ||'%' "Hit Ratio"
+FROM V$BUFFER_POOL_STATISTICS;
+SELECT '================================================================================================================================' FROM dual;
+/*Avaliando memória alocada para os Processos*/
+SELECT '================================================================================================================================' FROM dual;
+SELECT 'Avaliando memória alocada para os Processos' FROM dual;
+SELECT '================================================================================================================================' FROM dual;
+SELECT ( 'pga_used_mem = '
+  ||
+  CASE
+    WHEN MAX(pga_used_mem) <1073741824
+    THEN ROUND( MAX(pga_used_mem) /1048576,2)
+      ||' Mb'
+    ELSE ROUND( MAX(pga_used_mem) /1048576/1024,2)
+      ||' Gb'
+  END) pga_used_mem,
+  ( 'pga_alloc_mem = '
+  ||
+  CASE
+    WHEN MAX(pga_alloc_mem) <1073741824
+    THEN ROUND( MAX(pga_alloc_mem) /1048576,2)
+      ||' Mb'
+    ELSE ROUND( MAX(pga_alloc_mem) /1048576/1024,2)
+      ||' Gb'
+  END) pga_alloc_mem,
+  'pga_max_mem = '
+  ||(
+  CASE
+    WHEN MAX(pga_max_mem) <1073741824
+    THEN ROUND( MAX(pga_max_mem) /1048576,2)
+      ||' Mb'
+    ELSE ROUND( MAX(pga_max_mem) /1048576/1024,2)
+      ||' Gb'
+  END) pga_max_mem
+FROM v$process;
+/*Estimativas Recomendadas*/
+SELECT '================================================================================================================================' FROM dual;
+SELECT 'Estimativas Recomendadas(Memória PGA)' FROM dual;
+SELECT '================================================================================================================================' FROM dual;
+SELECT 'PGA_TARGET_FACTOR',
+  'PGA_TARGET_FOR_ESTIMATE',
+  'ESTD_EXTRA_BYTES_RW',
+  'ESTD_OVERALLOC_COUNT'
+FROM dual;
+SELECT PGA_TARGET_FACTOR,
+  (
+  CASE
+    WHEN PGA_TARGET_FOR_ESTIMATE <1073741824
+    THEN ROUND( PGA_TARGET_FOR_ESTIMATE /1048576,2)
+      ||' Mb'
+    ELSE ROUND( PGA_TARGET_FOR_ESTIMATE /1048576/1024,2)
+      ||' Gb'
+  END) PGA_TARGET_FOR_ESTIMATE,
+  TO_CHAR(ROUND(ESTD_PGA_CACHE_HIT_PERCENTAGE,4),'999.99')
+  ||'%' ESTD_PGA_CACHE_HIT_PERCENTAGE ,
+  (
+  CASE
+    WHEN ESTD_EXTRA_BYTES_RW <1073741824
+    THEN ROUND( PGA_TARGET_FOR_ESTIMATE /1048576,2)
+      ||' Mb'
+    ELSE ROUND( ESTD_EXTRA_BYTES_RW /1048576/1024,2)
+      ||' Gb'
+  END)ESTD_EXTRA_BYTES_RW ,
+  ESTD_OVERALLOC_COUNT
+FROM V$PGA_TARGET_ADVICE
+ORDER BY 1;
+/* Verificando Travas. Ideal é acima de 99%
+Internamente o Oracle utiliza vários tipos de estruturas, o acesso a estas estruturas
+é controlado usando uma variedade de mecanismos. Neste artigo,
+discutiremos um destes mecanismos conhecido como Latch (trava) e alguns métodos para minimizar a contenção dos mesmos no Oracle.
+Latches controlam o acesso a estruturas internas dos dados e também provêem um método para protege-las.
+Se um processo não puder obter uma trava imediatamente, ele entra em loop até conseguir o latche.
+Processos em loop devem ser minimizados, pois podem causar alto consumo de CPU e lentidão no sistema.
+Mais importantes:
+- Cache buffers chains
+Esta trava é utilizada quando o Oracle faz um scanner na SGA, a procura por dados no database buffer cache. A contenção pode ser reduzida por incremento do DB_BLOCK_BUFFERS
+- Cache buffers lru chain
+A trava cache buffers lru chain é necessária quando o LRU Chain que contém os blocos sujos do buffer é scaneado. Contenção para esta trava pode ser reduzida incrementando o DB_BLOCK_BUFFERS e DB_BLOCK_WRITE_BATCH.
+- Row cache objects
+A trava row cache objects é necessária quando o data dictionary cache está sendo acessado. Contenção para esta trava pode ser reduzida pelo incremento do parâmetro SHARED_POOL_SIZE.
+- Redo allocation e redo copy
+Decrementar o valor do parâmetro LOG_SMALL_ENTRY_MAX_SIZE
+*/
+SELECT '================================================================================================================================' FROM dual;
+SELECT 'Verificando Travas. Ideal é acima de 99%' FROM dual;
+SELECT '================================================================================================================================' FROM dual;
+SELECT 'Latch Name',
+  'Gets (Wait)',
+  'Misses (Wait)',
+  'Latch Hit Ratio %'
+FROM dual;
+COLUMN "Latch Hit Ratio %" FORMAT 990.00
+SELECT a.name "Latch Name",
+  a.gets "Gets (Wait)",
+  a.misses "Misses (Wait)",
+  (1 - (misses / gets)) * 100 "Latch Hit Ratio %"
+FROM v$latch a
+WHERE a.gets != 0
+UNION
+SELECT a.name "Latch Name",
+  a.gets "Gets (Wait)",
+  a.misses "Misses (Wait)",
+  100 "Latch Hit Ratio"
+FROM v$latch a
+WHERE a.gets = 0
+ORDER BY 1;
+SELECT '================================================================================================================================' FROM dual;
